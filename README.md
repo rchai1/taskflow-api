@@ -2,7 +2,7 @@
 
 ## Module 4 Assignment Submission
 
-TaskFlow API containerized with a multi-stage Dockerfile and deployed to Railway (built from this GitHub repo).
+TaskFlow API containerized with a multi-stage `Dockerfile` and deployed to Railway (built from this GitHub repo).
 
 ### Live application URL
 
@@ -37,11 +37,52 @@ Railway: "Free plan resource provision limit exceeded" when creating a new proje
 Deleted an old lesson project to free up resources.
 ```
 
-### Stretch goal (optional)
+### Stretch goal: Option 5 - Security checks
 
-```
-Stretch goal: None
-```
+I added two non-blocking security checks ("watchdogs", Lesson 4.14) with GitHub Actions, fixed what they found, and checked the repo for secrets.
+| Check | Tool | Type | Runs | Workflow |
+|---|---|---|---|---|
+| Dependency scan | OSV-Scanner (Google) | SCA | Every push to `main` + every Monday | `.github/workflows/osv-scanner.yml` |
+| Live app scan | OWASP ZAP baseline | DAST | On demand after a deploy + every Monday | `.github/workflows/zap-baseline.yml` |
+Both workflows pin their actions by full commit SHA, not by tag, and use least-privilege `permissions`. The app URL is stored as a repository variable (`APP_URL`), not hard-coded.
+
+> Note: the assignment mentions OWASP Dependency-Check. I used OSV-Scanner instead because it is the dependency (SCA) scanner taught in Lesson 4.14. It does the same job: checks every dependency in `pom.xml`, including transitive ones, against known vulnerabilities (OSV.dev, which includes the GitHub Advisory Database and NVD).
+
+#### 1. Dependency scan (OSV-Scanner)
+
+**Result: 0 known vulnerabilities.** The workflow passed and the Security tab shows no code scanning alerts. Nothing to fix, because the project uses a recent Spring Boot version (4.1.1). The weekly schedule will catch new vulnerabilities published later.
+![OSV-Scanner run](screenshots/osv-run.png)
+![OSV-Scanner alerts](screenshots/osv-alerts.png)
+
+#### 2. Live app scan (OWASP ZAP baseline)
+
+**First scan (before fix): 0 High, 0 Medium, 1 Low, 1 Informational**
+(zap-baseline-scan run #1, attempt #1. Run #1 was later re-run after the fix, so its latest attempt shows the new result.)
+| Alert | Risk | Meaning |
+|---|---|---|
+| Strict-Transport-Security Header Not Set | Low | The app did not tell browsers to always use HTTPS |
+| Storable and Cacheable Content | Informational | Responses could be stored by shared caches (proxies) |
+![ZAP before fix](screenshots/zap-before.png)
+**Fix:** I added `SecurityHeadersFilter` (`src/main/java/sg/edu/ntu/taskflow_api/config/SecurityHeadersFilter.java`), which adds two headers to every response:
+
+- `Strict-Transport-Security: max-age=31536000; includeSubDomains` fixes the HSTS alert
+- `Cache-Control: no-store` stops caches from storing API responses (task data can be user-specific)
+  **Second scan (after fix): 0 High, 0 Medium, 0 Low, 1 Informational**
+  (zap-baseline-scan run #2)
+  The HSTS alert is gone. The only remaining alert is **Non-Storable Content** (Informational). That is the expected result of `Cache-Control: no-store`: ZAP is just noting that responses are no longer cached. I left it as is on purpose, because not caching API data is the safer choice here.
+  ![ZAP after fix](screenshots/zap-after.png)
+  **Limitation:** a ZAP baseline scan crawls links like a browser. This is a JSON API with no HTML pages, so ZAP only reached `/`, `/robots.txt` and `/sitemap.xml` (all 4xx). It checks the response headers the app sends, but it does not test the `/api/tasks` endpoints themselves. A full API scan with an OpenAPI definition would be the next step.
+
+#### 3. Secrets check
+
+- No passwords, tokens or API keys are committed to the repository (I checked the code and the git history).
+- The OpenAI API key is read from an environment variable (`spring.ai.openai.api-key=${OPENAI_API_KEY}`). It is set in Railway's Variables, never in the code.
+- `.gitignore` excludes build output (`target/`).
+
+#### Problems I hit
+
+- `git add .github` failed with "pathspec '.github' did not match any files". I had created the folder as `github` (no dot) in the wrong place. GitHub only runs workflows from `.github/workflows` inside the repo.
+- The ZAP workflow doesn't run on push (only on demand or on Monday), so I started it with **Run workflow** in the Actions tab.
 
 ### How to run with Docker
 
